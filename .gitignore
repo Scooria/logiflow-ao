@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+
+# Deliverables / generated build outputs — not source, kept out of the repo
+LogiFlow-AO-offline.html
+LogiFlow-AO-demo-seguranca.mp4
+LogiFlow-AO-one-pager.pdf
+onepager.html
+*.pdf
+*.mp4
+

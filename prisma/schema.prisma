@@ -1,0 +1,1149 @@
+// =====================================================================================
+// LOGIFLOW AO — PLATAFORMA ENTERPRISE DE LOGÍSTICA MULTIMODAL, WMS & TMS
+// Angola & Expansão Internacional
+// -------------------------------------------------------------------------------------
+// PASSO 1 / 4 — BASE DE DADOS ENTERPRISE (PRISMA ORM)
+// Actualizado no PASSO 4 com o modelo de auditoria de ingestão de documentos.
+//
+// Cobertura deste ficheiro:
+//   1. Multi-tenancy (isolamento por Tenant em todas as entidades operacionais)
+//   2. Divisão político-administrativa de Angola (21 Províncias) como enum nativo
+//   3. Hierarquia WMS: Warehouse -> Zone -> Rack -> Shelf -> StorageLocation (Bin)
+//      com endereçamento único (ex.: AO-LUA-WH1-ZA-R04-L02-B12) e código de barras
+//      (Code-128 / GS1-128 / QR) por item, lote e localização
+//   4. Expedição Aérea: AWB (MAWB/HAWB) alinhado a IATA CargoXML / One Record,
+//      voos, aeroportos e peso taxável (C x L x A / 6000)
+//   5. Expedição Terrestre: Guias de Transporte Rodoviário, manifesto de carga,
+//      rotas interprovinciais e corredores SADC (ex. Corredor do Lobito)
+//   6. Transações financeiras com campos nativos para EMIS (Multicaixa/MCX Express),
+//      RUPE (AGT), Stripe Connect, PayPal e SWIFT/SEPA, multi-moeda (AOA/USD/EUR/ZAR)
+//   7. Fiscalidade AGT: Faturas certificadas, IVA (14%), retenção na fonte
+//   8. Conectores ERP (SAP S/4HANA, Cegid Primavera, Dynamics 365, NetSuite)
+//   9. Document AI: auditoria de extração de Faturas, Packing Lists e E-mails de
+//      cotação, com ligação ao Shipment criado por automação de reservas (Passo 4)
+//
+// Convenções:
+//   - Todas as entidades operacionais carregam `tenantId` + índice, garantindo
+//     isolamento lógico multi-tenant ao nível da aplicação e da base de dados.
+//   - IDs usam cuid() para serem ordenáveis e seguros para exposição em APIs.
+//   - Todos os valores monetários são armazenados em Decimal(18,4) para evitar
+//     erros de arredondamento em cálculos financeiros/fiscais.
+//   - Timestamps `createdAt` / `updatedAt` presentes em todas as entidades de negócio.
+// =====================================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================================
+// 1. MULTI-TENANCY & IDENTIDADE
+// =====================================================================================
+
+/// Cada cliente da plataforma (transitário, operador logístico, armazém 3PL, etc.)
+/// é um Tenant isolado. Todas as entidades operacionais referenciam tenantId.
+model Tenant {
+  id              String   @id @default(cuid())
+  name            String
+  legalName       String?
+  nif             String? // Número de Identificação Fiscal (Angola) / Tax ID
+  country         String   @default("AO") // ISO 3166-1 alpha-2
+  defaultCurrency Currency @default(AOA)
+  timezone        String   @default("Africa/Luanda")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  users            User[]
+  warehouses       Warehouse[]
+  items            Item[]
+  parties          Party[]
+  shipments        Shipment[]
+  airWaybills      AirWaybill[]
+  roadWaybills     RoadWaybill[]
+  vehicles         Vehicle[]
+  drivers          Driver[]
+  roadRoutes       RoadRoute[]
+  transactions     Transaction[]
+  invoices         Invoice[]
+  erpConnections   ErpConnection[]
+  barcodes         Barcode[]
+  stockMovements   StockMovement[]
+  trackingEvents   TrackingEvent[]
+  scanEvents       BarcodeScanEvent[]
+  ingestedDocuments IngestedDocument[]
+  ulds             Uld[]
+  cargoReleases    CargoRelease[]
+
+  @@map("tenants")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  TENANT_ADMIN
+  OPERATIONS_MANAGER
+  WAREHOUSE_STAFF
+  FINANCE
+  CUSTOMS_BROKER
+  DRIVER_APP
+  CUSTOMER_PORTAL
+}
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email        String
+  passwordHash String
+  name         String
+  phone        String?
+  role         UserRole @default(WAREHOUSE_STAFF)
+  isActive     Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  stockMovements    StockMovement[] @relation("StockMovementUser")
+  barcodeScanEvents BarcodeScanEvent[] @relation("ScanUser")
+  driverProfile     Driver?
+  cargoReleaseBreakdowns CargoRelease[] @relation("CargoReleaseBreakdown")
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+// =====================================================================================
+// 2. DIVISÃO POLÍTICO-ADMINISTRATIVA DE ANGOLA (21 PROVÍNCIAS)
+// =====================================================================================
+
+/// As 21 províncias de Angola, usadas para cálculo de rotas interprovinciais,
+/// despacho aduaneiro regional e emissão de guias rodoviárias.
+enum Province {
+  LUANDA
+  BENGO
+  BENGUELA
+  BIE
+  CABINDA
+  CUANDO_CUBANGO
+  CUANZA_NORTE
+  CUANZA_SUL
+  CUNENE
+  HUAMBO
+  HUILA
+  LUNDA_NORTE
+  LUNDA_SUL
+  MALANJE
+  MOXICO
+  NAMIBE
+  UIGE
+  ZAIRE
+  ICOLO_E_BENGO
+  MOXICO_LESTE
+  CUANDO // província do Cuando (resultante da divisão administrativa do ex-Cuando Cubango)
+
+  @@map("province")
+}
+
+// =====================================================================================
+// 3. MÓDULO WMS — HIERARQUIA DE ARMAZÉM & ENDEREÇAMENTO ÚNICO
+//    País/Província/Armazém/Zona/Rack/Prateleira/Posição
+//    Ex.: AO-LUA-WH1-ZA-R04-L02-B12
+// =====================================================================================
+
+enum WarehouseZoneType {
+  RECEIVING
+  STORAGE
+  PICKING
+  PACKING
+  COLD_CHAIN
+  HAZMAT
+  CUSTOMS_BONDED
+  CROSS_DOCK
+  RETURNS
+}
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  code      String // ex.: WH1
+  name      String
+  province  Province
+  address   String?
+  latitude  Float?
+  longitude Float?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  zones             WarehouseZone[]
+  stockItems        StockItem[]
+  originShipments      Shipment[]      @relation("OriginWarehouse")
+  destinationShipments Shipment[]      @relation("DestinationWarehouse")
+  ulds                 Uld[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, province])
+  @@map("warehouses")
+}
+
+model WarehouseZone {
+  id          String            @id @default(cuid())
+  warehouseId String
+  warehouse   Warehouse         @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  code        String // ex.: ZA
+  name        String
+  type        WarehouseZoneType @default(STORAGE)
+  createdAt   DateTime          @default(now())
+
+  racks Rack[]
+
+  @@unique([warehouseId, code])
+  @@map("warehouse_zones")
+}
+
+model Rack {
+  id     String        @id @default(cuid())
+  zoneId String
+  zone   WarehouseZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+  code   String // ex.: R04
+
+  shelves Shelf[]
+
+  @@unique([zoneId, code])
+  @@map("racks")
+}
+
+model Shelf {
+  id     String @id @default(cuid())
+  rackId String
+  rack   Rack   @relation(fields: [rackId], references: [id], onDelete: Cascade)
+  code   String // nível, ex.: L02
+
+  locations StorageLocation[]
+
+  @@unique([rackId, code])
+  @@map("shelves")
+}
+
+/// Posição/Bin — nó folha da hierarquia WMS. `uniqueAddress` é gerado e persistido
+/// no formato AO-{PROVÍNCIA}-{ARMAZÉM}-{ZONA}-{RACK}-{PRATELEIRA}-{POSIÇÃO},
+/// calculado pelo serviço de endereçamento (Passo 2) a partir da hierarquia acima.
+model StorageLocation {
+  id            String   @id @default(cuid())
+  shelfId       String
+  shelf         Shelf    @relation(fields: [shelfId], references: [id], onDelete: Cascade)
+  code          String // posição, ex.: B12
+  uniqueAddress String   @unique // ex.: AO-LUA-WH1-ZA-R04-L02-B12
+  capacityUnits Int? // capacidade máxima de unidades/paletes
+  barcodeValue  String?  @unique // GS1-128/Code-128 associado à localização
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  stockItems    StockItem[]
+  movementsFrom StockMovement[] @relation("MovementFromLocation")
+  movementsTo   StockMovement[] @relation("MovementToLocation")
+  barcodes      Barcode[]
+  cargoReleases CargoRelease[]
+
+  @@unique([shelfId, code])
+  @@index([uniqueAddress])
+  @@map("storage_locations")
+}
+
+// =====================================================================================
+// 3.1 CATÁLOGO DE ITENS, LOTES & CÓDIGOS DE BARRA (GS1-128 / Code-128 / QR)
+// =====================================================================================
+
+model Item {
+  id                    String   @id @default(cuid())
+  tenantId              String
+  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sku                   String
+  name                  String
+  description           String?
+  unitOfMeasure         String   @default("UN") // UN, KG, CX, PAL...
+  weightKg              Decimal? @db.Decimal(12, 3)
+  lengthCm              Decimal? @db.Decimal(10, 2)
+  widthCm               Decimal? @db.Decimal(10, 2)
+  heightCm              Decimal? @db.Decimal(10, 2)
+  requiresBatchTracking Boolean  @default(false)
+  requiresExpiryControl Boolean  @default(false)
+  hsCode                String? // Código Pautal / Harmonized System
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  batches        Batch[]
+  stockItems     StockItem[]
+  barcodes       Barcode[]
+  manifestItems  ManifestItem[]
+
+  @@unique([tenantId, sku])
+  @@index([tenantId])
+  @@map("items")
+}
+
+model Batch {
+  id              String    @id @default(cuid())
+  itemId          String
+  item            Item      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  batchNumber     String
+  manufactureDate DateTime?
+  expiryDate      DateTime?
+  createdAt       DateTime  @default(now())
+
+  stockItems StockItem[]
+  barcodes   Barcode[]
+
+  @@unique([itemId, batchNumber])
+  @@index([expiryDate])
+  @@map("batches")
+}
+
+enum BarcodeSymbology {
+  CODE_128
+  GS1_128
+  QR_CODE
+}
+
+/// Registo mestre de códigos de barra/QR gerados pela plataforma, associáveis
+/// a um Item, Batch e/ou StorageLocation para leitura instantânea via scanner.
+model Barcode {
+  id           String           @id @default(cuid())
+  tenantId     String
+  tenant       Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  symbology    BarcodeSymbology
+  value        String           @unique // valor codificado (ex.: GS1-128 AI string)
+  itemId       String?
+  item         Item?            @relation(fields: [itemId], references: [id])
+  batchId      String?
+  batch        Batch?           @relation(fields: [batchId], references: [id])
+  locationId   String?
+  location     StorageLocation? @relation(fields: [locationId], references: [id])
+  gs1AiPayload Json? // Application Identifiers decodificados (01=GTIN,10=LOTE,17=VALIDADE...)
+  generatedAt  DateTime         @default(now())
+
+  scanEvents BarcodeScanEvent[]
+
+  @@index([tenantId])
+  @@map("barcodes")
+}
+
+enum ScanAction {
+  INBOUND
+  OUTBOUND
+  TRANSFER
+  CYCLE_COUNT
+  PICK
+  PUTAWAY
+}
+
+/// Log de leituras de scanner (câmara do dispositivo ou leitor dedicado) usado
+/// pelo painel WMS (Passo 3) para entrada/saída de armazém em tempo real.
+model BarcodeScanEvent {
+  id             String     @id @default(cuid())
+  tenantId       String
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  barcodeId      String
+  barcode        Barcode    @relation(fields: [barcodeId], references: [id])
+  action         ScanAction
+  scannedByUserId String
+  scannedByUser   User      @relation("ScanUser", fields: [scannedByUserId], references: [id])
+  deviceId       String?
+  scannedAt      DateTime   @default(now())
+
+  @@index([tenantId, scannedAt])
+  @@map("barcode_scan_events")
+}
+
+// =====================================================================================
+// 3.2 STOCK & MOVIMENTOS
+// =====================================================================================
+
+model StockItem {
+  id          String           @id @default(cuid())
+  tenantId    String
+  warehouseId String
+  warehouse   Warehouse        @relation(fields: [warehouseId], references: [id])
+  locationId  String
+  location    StorageLocation  @relation(fields: [locationId], references: [id])
+  itemId      String
+  item        Item             @relation(fields: [itemId], references: [id])
+  batchId     String?
+  batch       Batch?           @relation(fields: [batchId], references: [id])
+  quantity    Decimal          @db.Decimal(14, 3)
+  reservedQty Decimal          @default(0) @db.Decimal(14, 3)
+  updatedAt   DateTime         @updatedAt
+
+  movements StockMovement[]
+
+  @@unique([locationId, itemId, batchId])
+  @@index([tenantId, warehouseId])
+  @@map("stock_items")
+}
+
+enum StockMovementType {
+  INBOUND
+  OUTBOUND
+  TRANSFER
+  ADJUSTMENT
+  CYCLE_COUNT
+}
+
+model StockMovement {
+  id               String            @id @default(cuid())
+  tenantId         String
+  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stockItemId      String
+  stockItem        StockItem         @relation(fields: [stockItemId], references: [id])
+  type             StockMovementType
+  quantity         Decimal           @db.Decimal(14, 3)
+  fromLocationId   String?
+  fromLocation     StorageLocation?  @relation("MovementFromLocation", fields: [fromLocationId], references: [id])
+  toLocationId     String?
+  toLocation       StorageLocation?  @relation("MovementToLocation", fields: [toLocationId], references: [id])
+  performedByUserId String
+  performedByUser   User             @relation("StockMovementUser", fields: [performedByUserId], references: [id])
+  relatedShipmentId String?
+  relatedShipment    Shipment?       @relation(fields: [relatedShipmentId], references: [id])
+  notes            String?
+  createdAt        DateTime          @default(now())
+
+  @@index([tenantId, createdAt])
+  @@map("stock_movements")
+}
+
+// =====================================================================================
+// 4. PARCEIROS COMERCIAIS (Shipper / Consignee / Cliente)
+// =====================================================================================
+
+enum PartyType {
+  INDIVIDUAL
+  COMPANY
+}
+
+model Party {
+  id        String    @id @default(cuid())
+  tenantId  String
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  type      PartyType @default(COMPANY)
+  name      String
+  nif       String? // NIF (Angola) ou Tax ID internacional
+  email     String?
+  phone     String?
+  address   String?
+  province  Province?
+  country   String    @default("AO")
+  iban      String? // conta bancária (BFA, BAI, BIC, Keve, etc.)
+  // --- Estatuto VIP (Passo 6 — levantamento de carga importada) ---
+  // Recalculado por `recalculateVipStatus()` (cargoRelease.service.ts) com
+  // base no volume de movimentos (AWBs) do destinatário numa janela recente
+  // — não é definido manualmente, para não ficar desactualizado.
+  vipStatus Boolean   @default(false)
+  vipSince  DateTime?
+  createdAt DateTime  @default(now())
+
+  shipmentsAsShipper   Shipment[] @relation("ShipperParty")
+  shipmentsAsConsignee Shipment[] @relation("ConsigneeParty")
+  awbAsShipper         AirWaybill[] @relation("AwbShipper")
+  awbAsConsignee       AirWaybill[] @relation("AwbConsignee")
+  roadAsShipper        RoadWaybill[] @relation("RoadShipper")
+  roadAsConsignee      RoadWaybill[] @relation("RoadConsignee")
+  invoices             Invoice[]
+
+  @@index([tenantId])
+  @@index([tenantId, vipStatus])
+  @@map("parties")
+}
+
+// =====================================================================================
+// 5. EXPEDIÇÃO — SHIPMENT MULTIMODAL (ORQUESTRAÇÃO)
+// =====================================================================================
+
+enum CargoMode {
+  AIR
+  ROAD
+  MULTIMODAL
+}
+
+enum ShipmentStatus {
+  DRAFT
+  BOOKED
+  PICKED_UP
+  IN_TRANSIT
+  CUSTOMS_HOLD
+  CUSTOMS_CLEARED
+  ARRIVED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+  RETURNED
+}
+
+/// Entidade "guarda-chuva" que representa o envio do ponto de vista do cliente,
+/// podendo estar associada a um AWB (aéreo), uma Guia Rodoviária (terrestre)
+/// ou ambos em caso de operação multimodal (ex.: voo até Luanda + distribuição
+/// rodoviária interprovincial).
+model Shipment {
+  id                 String         @id @default(cuid())
+  tenantId           String
+  tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shipmentNumber     String         @unique
+  mode               CargoMode
+  status             ShipmentStatus @default(DRAFT)
+  shipperId          String
+  shipper            Party          @relation("ShipperParty", fields: [shipperId], references: [id])
+  consigneeId        String
+  consignee          Party          @relation("ConsigneeParty", fields: [consigneeId], references: [id])
+  originWarehouseId      String?
+  originWarehouse        Warehouse? @relation("OriginWarehouse", fields: [originWarehouseId], references: [id])
+  destinationWarehouseId String?
+  destinationWarehouse   Warehouse? @relation("DestinationWarehouse", fields: [destinationWarehouseId], references: [id])
+  airWaybillId       String?        @unique
+  airWaybill         AirWaybill?    @relation(fields: [airWaybillId], references: [id])
+  roadWaybillId      String?        @unique
+  roadWaybill        RoadWaybill?   @relation(fields: [roadWaybillId], references: [id])
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  transactions      Transaction[]
+  invoices          Invoice[]
+  trackingEvents    TrackingEvent[]
+  stockMovements    StockMovement[]
+  ingestedDocuments IngestedDocument[]
+
+  @@index([tenantId, status])
+  @@map("shipments")
+}
+
+/// Linha do tempo de rastreamento consolidada (aéreo + terrestre) exibida no
+/// Dashboard Multimodal (Passo 3).
+model TrackingEvent {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shipmentId  String
+  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  status      ShipmentStatus
+  location    String?
+  province    Province?
+  description String?
+  source      String? // ex.: "IATA_ONE_RECORD", "AGT", "DRIVER_APP", "MANUAL"
+  occurredAt  DateTime @default(now())
+
+  @@index([tenantId, shipmentId, occurredAt])
+  @@map("tracking_events")
+}
+
+// =====================================================================================
+// 6. EXPEDIÇÃO AÉREA — IATA CargoXML / One Record (AWB / MAWB / HAWB)
+// =====================================================================================
+
+model Airport {
+  id       String @id @default(cuid())
+  iataCode String @unique // ex.: LAD (Luanda), JFK
+  icaoCode String? @unique
+  name     String
+  city     String
+  country  String
+
+  flightsDeparting Flight[] @relation("DepartureAirport")
+  flightsArriving  Flight[] @relation("ArrivalAirport")
+  awbOrigin        AirWaybill[] @relation("AwbOriginAirport")
+  awbDestination   AirWaybill[] @relation("AwbDestinationAirport")
+
+  @@map("airports")
+}
+
+enum FlightStatus {
+  SCHEDULED
+  DEPARTED
+  IN_FLIGHT
+  LANDED
+  CANCELLED
+  DIVERTED
+}
+
+model Flight {
+  id                  String       @id @default(cuid())
+  flightNumber        String
+  airlineIataCode     String
+  departureAirportId  String
+  departureAirport    Airport      @relation("DepartureAirport", fields: [departureAirportId], references: [id])
+  arrivalAirportId    String
+  arrivalAirport      Airport      @relation("ArrivalAirport", fields: [arrivalAirportId], references: [id])
+  scheduledDeparture  DateTime
+  scheduledArrival    DateTime
+  actualDeparture     DateTime?
+  actualArrival       DateTime?
+  status              FlightStatus @default(SCHEDULED)
+
+  airWaybills AirWaybill[]
+  ulds        Uld[]
+
+  @@unique([flightNumber, scheduledDeparture])
+  @@map("flights")
+}
+
+enum AwbType {
+  MASTER
+  HOUSE
+}
+
+/// Air Waybill — cobre MAWB e HAWB (via auto-relação `masterAwbId`), alinhado
+/// aos padrões IATA CargoXML e One Record. `chargeableWeightKg` é calculado
+/// pelo motor de tarifação (Passo 2) usando (C x L x A) / 6000 por volume,
+/// comparado ao peso bruto real, prevalecendo o maior.
+model AirWaybill {
+  id                    String      @id @default(cuid())
+  tenantId              String
+  tenant                Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  awbNumber             String      @unique // formato IATA: 3 dígitos prefixo + 8 dígitos serial
+  type                  AwbType     @default(MASTER)
+  masterAwbId           String?
+  masterAwb             AirWaybill? @relation("HouseToMaster", fields: [masterAwbId], references: [id])
+  houseAwbs             AirWaybill[] @relation("HouseToMaster")
+  shipperId             String
+  shipper               Party       @relation("AwbShipper", fields: [shipperId], references: [id])
+  consigneeId           String
+  consignee             Party       @relation("AwbConsignee", fields: [consigneeId], references: [id])
+  originAirportId       String
+  originAirport         Airport     @relation("AwbOriginAirport", fields: [originAirportId], references: [id])
+  destinationAirportId  String
+  destinationAirport    Airport     @relation("AwbDestinationAirport", fields: [destinationAirportId], references: [id])
+  flightId              String?
+  flight                Flight?     @relation(fields: [flightId], references: [id])
+  uldId                 String? // ULD (contentor/palete) em que a carga chegou fisicamente — Passo 6
+  uld                   Uld?        @relation(fields: [uldId], references: [id])
+  pieces                Int
+  grossWeightKg         Decimal     @db.Decimal(12, 3)
+  volumeM3               Decimal?    @db.Decimal(12, 4)
+  chargeableWeightKg    Decimal     @db.Decimal(12, 3) // max(pesoBruto, (CxLxA)/6000 por volume)
+  currency              Currency    @default(USD)
+  declaredValueForCarriage Decimal? @db.Decimal(18, 4)
+  declaredValueForCustoms  Decimal? @db.Decimal(18, 4)
+  incoterm              String? // EXW, FOB, CIF, DAP...
+  status                ShipmentStatus @default(BOOKED)
+  cargoXmlPayload       Json? // payload IATA CargoXML (XFWB/XFZB) bruto
+  oneRecordLogisticsObjectId String? // referência ao Logistics Object no IATA One Record
+  issuedAt              DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  awbPieces             AwbPiece[]
+  shipment              Shipment?
+  cargoRelease          CargoRelease?
+
+  @@index([tenantId, status])
+  @@index([uldId])
+  @@map("air_waybills")
+}
+
+/// Detalhe de volumes/peças do AWB, usado para o cálculo de peso taxável
+/// por peça: (comprimento x largura x altura em cm) / 6000 = peso volumétrico em kg.
+model AwbPiece {
+  id            String     @id @default(cuid())
+  awbId         String
+  awb           AirWaybill @relation(fields: [awbId], references: [id], onDelete: Cascade)
+  description   String?
+  lengthCm      Decimal    @db.Decimal(10, 2)
+  widthCm       Decimal    @db.Decimal(10, 2)
+  heightCm      Decimal    @db.Decimal(10, 2)
+  grossWeightKg Decimal    @db.Decimal(12, 3)
+  hsCode        String?
+
+  @@map("awb_pieces")
+}
+
+// =====================================================================================
+// 7. EXPEDIÇÃO TERRESTRE — GUIAS DE TRANSPORTE RODOVIÁRIO & ROTAS INTERPROVINCIAIS
+// =====================================================================================
+
+enum VehicleType {
+  TRUCK
+  VAN
+  TRAILER
+  CONTAINER_TRUCK
+}
+
+model Vehicle {
+  id            String      @id @default(cuid())
+  tenantId      String
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plateNumber   String
+  type          VehicleType @default(TRUCK)
+  capacityKg    Decimal?    @db.Decimal(12, 3)
+  capacityM3    Decimal?    @db.Decimal(12, 4)
+  isActive      Boolean     @default(true)
+
+  roadWaybills RoadWaybill[]
+
+  @@unique([tenantId, plateNumber])
+  @@map("vehicles")
+}
+
+model Driver {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId        String?  @unique
+  user          User?    @relation(fields: [userId], references: [id])
+  name          String
+  licenseNumber String
+  phone         String?
+  isActive      Boolean  @default(true)
+
+  roadWaybills RoadWaybill[]
+
+  @@unique([tenantId, licenseNumber])
+  @@map("drivers")
+}
+
+/// Rota interprovincial pré-definida (inclui corredores logísticos regionais
+/// como o Corredor do Lobito, usado para tráfego SADC).
+model RoadRoute {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name                String? // ex.: "Corredor do Lobito"
+  originProvince      Province
+  destinationProvince Province
+  distanceKm          Decimal?  @db.Decimal(10, 2)
+  estimatedHours       Decimal? @db.Decimal(6, 2)
+  isSadcCorridor      Boolean   @default(false)
+  isActive            Boolean   @default(true)
+
+  roadWaybills RoadWaybill[]
+
+  @@unique([tenantId, originProvince, destinationProvince, name])
+  @@map("road_routes")
+}
+
+/// Guia de Transporte Rodoviário — documento legal angolano que acompanha a
+/// mercadoria em trânsito interprovincial, com validação digital junto à AGT.
+model RoadWaybill {
+  id                 String         @id @default(cuid())
+  tenantId           String
+  tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  guideNumber        String         @unique // Número da Guia de Transporte
+  shipperId          String
+  shipper            Party          @relation("RoadShipper", fields: [shipperId], references: [id])
+  consigneeId        String
+  consignee          Party          @relation("RoadConsignee", fields: [consigneeId], references: [id])
+  originProvince      Province
+  destinationProvince Province
+  routeId            String?
+  route              RoadRoute?     @relation(fields: [routeId], references: [id])
+  vehicleId          String
+  vehicle            Vehicle        @relation(fields: [vehicleId], references: [id])
+  driverId           String
+  driver             Driver         @relation(fields: [driverId], references: [id])
+  totalWeightKg      Decimal?       @db.Decimal(12, 3)
+  totalVolumeM3      Decimal?       @db.Decimal(12, 4)
+  status             ShipmentStatus @default(BOOKED)
+  agtValidationCode  String? // código de validação digital emitido pela AGT
+  issuedAt           DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  manifest  CargoManifest?
+  shipment  Shipment?
+
+  @@index([tenantId, status])
+  @@index([originProvince, destinationProvince])
+  @@map("road_waybills")
+}
+
+/// Manifesto de carga associável a uma guia rodoviária, listando os itens
+/// transportados (com referência opcional ao stock de origem no WMS).
+model CargoManifest {
+  id            String       @id @default(cuid())
+  roadWaybillId String       @unique
+  roadWaybill   RoadWaybill  @relation(fields: [roadWaybillId], references: [id], onDelete: Cascade)
+  createdAt     DateTime     @default(now())
+
+  items ManifestItem[]
+
+  @@map("cargo_manifests")
+}
+
+model ManifestItem {
+  id           String        @id @default(cuid())
+  manifestId   String
+  manifest     CargoManifest @relation(fields: [manifestId], references: [id], onDelete: Cascade)
+  itemId       String?
+  item         Item?         @relation(fields: [itemId], references: [id])
+  description  String
+  quantity     Decimal       @db.Decimal(14, 3)
+  weightKg     Decimal?      @db.Decimal(12, 3)
+
+  @@map("manifest_items")
+}
+
+// =====================================================================================
+// 8. PAGAMENTOS & FINANÇAS — EMIS, RUPE, STRIPE, PAYPAL, SWIFT/SEPA
+// =====================================================================================
+
+enum Currency {
+  AOA
+  USD
+  EUR
+  ZAR
+}
+
+enum PaymentMethod {
+  EMIS_REFERENCE // Referência Multicaixa dinâmica
+  MCX_EXPRESS
+  RUPE // Referência Única de Pagamento ao Estado (AGT)
+  IBAN_TRANSFER
+  STRIPE_CARD
+  STRIPE_CONNECT
+  PAYPAL
+  SWIFT
+  SEPA
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  PAID
+  PARTIALLY_PAID
+  FAILED
+  EXPIRED
+  REFUNDED
+  CANCELLED
+}
+
+enum TransactionType {
+  PAYMENT
+  REFUND
+  PAYOUT
+}
+
+/// Transação financeira unificada. Apenas os campos relevantes ao `method`
+/// escolhido são preenchidos; os restantes ficam null. `webhookPayload`
+/// guarda o payload bruto recebido (ex.: webhook EMIS/Stripe) para auditoria.
+model Transaction {
+  id         String          @id @default(cuid())
+  tenantId   String
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  shipmentId String?
+  shipment   Shipment?       @relation(fields: [shipmentId], references: [id])
+  invoiceId  String?
+  invoice    Invoice?        @relation(fields: [invoiceId], references: [id])
+  type       TransactionType @default(PAYMENT)
+  method     PaymentMethod
+  status     PaymentStatus   @default(PENDING)
+  amount     Decimal         @db.Decimal(18, 4)
+  currency   Currency        @default(AOA)
+
+  // --- EMIS / Multicaixa (Angola) ---
+  emisEntity      String? // Entidade EMIS
+  emisReference   String? // Referência de pagamento gerada
+  emisTerminalId  String?
+  mcxExpressPhone String? // número associado ao MCX Express
+
+  // --- RUPE (AGT) ---
+  rupeReference      String?
+  rupeTaxpayerNif    String?
+
+  // --- Stripe ---
+  stripePaymentIntentId String?
+  stripeConnectAccountId String?
+  stripeChargeId         String?
+
+  // --- PayPal ---
+  paypalOrderId String?
+
+  // --- SWIFT / SEPA ---
+  swiftReference String?
+  ibanFrom       String?
+  ibanTo         String?
+
+  webhookPayload Json?
+  expiresAt      DateTime?
+  paidAt         DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  cargoRelease CargoRelease?
+
+  @@index([tenantId, status])
+  @@index([emisReference])
+  @@index([rupeReference])
+  @@index([stripePaymentIntentId])
+  @@map("transactions")
+}
+
+// =====================================================================================
+// 9. FISCALIDADE — FATURAÇÃO CERTIFICADA AGT (IVA 14%, RETENÇÃO NA FONTE)
+// =====================================================================================
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  CERTIFIED_AGT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model Invoice {
+  id                 String        @id @default(cuid())
+  tenantId           String
+  tenant             Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  invoiceNumber      String        @unique // numeração sequencial AGT (série/número)
+  series             String        @default("A")
+  partyId            String
+  party              Party         @relation(fields: [partyId], references: [id])
+  shipmentId         String?
+  shipment           Shipment?     @relation(fields: [shipmentId], references: [id])
+  currency           Currency      @default(AOA)
+  subtotal           Decimal       @db.Decimal(18, 4)
+  ivaRate            Decimal       @default(0.14) @db.Decimal(5, 4) // IVA 14%
+  ivaAmount          Decimal       @db.Decimal(18, 4)
+  withholdingTaxRate Decimal?      @db.Decimal(5, 4) // retenção na fonte
+  withholdingTaxAmount Decimal?    @db.Decimal(18, 4)
+  totalAmount        Decimal       @db.Decimal(18, 4)
+  status             InvoiceStatus @default(DRAFT)
+  agtCertificationHash String? // hash de certificação do software de faturação (AGT)
+  agtValidationCode    String?
+  issuedAt           DateTime      @default(now())
+  dueDate            DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  lines        InvoiceLine[]
+  transactions Transaction[]
+
+  @@index([tenantId, status])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id          String  @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  description String
+  quantity    Decimal @db.Decimal(14, 3)
+  unitPrice   Decimal @db.Decimal(18, 4)
+  ivaRate     Decimal @default(0.14) @db.Decimal(5, 4)
+  lineTotal   Decimal @db.Decimal(18, 4)
+
+  @@map("invoice_lines")
+}
+
+// =====================================================================================
+// 10. CONECTORES ERP (SAP S/4HANA, Cegid Primavera, Dynamics 365, NetSuite)
+// =====================================================================================
+
+enum ErpSystem {
+  SAP_S4HANA
+  CEGID_PRIMAVERA
+  DYNAMICS_365
+  NETSUITE
+}
+
+enum ErpAuthType {
+  OAUTH2
+  API_KEY
+  BASIC
+  CERTIFICATE
+}
+
+model ErpConnection {
+  id            String      @id @default(cuid())
+  tenantId      String
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  system        ErpSystem
+  baseUrl       String
+  authType      ErpAuthType @default(OAUTH2)
+  credentialRef String // referência ao segredo em cofre externo (nunca em claro)
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+
+  syncLogs ErpSyncLog[]
+
+  @@index([tenantId])
+  @@map("erp_connections")
+}
+
+enum ErpSyncDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum ErpSyncStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+/// Log de sincronização bidirecional REST/GraphQL entre a plataforma e o ERP
+/// do cliente (faturas, stock, encomendas, etc.).
+model ErpSyncLog {
+  id              String           @id @default(cuid())
+  erpConnectionId String
+  erpConnection   ErpConnection    @relation(fields: [erpConnectionId], references: [id], onDelete: Cascade)
+  entityType      String // ex.: "Invoice", "StockItem", "Shipment"
+  entityId        String
+  direction       ErpSyncDirection
+  status          ErpSyncStatus    @default(PENDING)
+  payload         Json?
+  errorMessage    String?
+  syncedAt        DateTime         @default(now())
+
+  @@index([erpConnectionId, status])
+  @@map("erp_sync_logs")
+}
+
+// =====================================================================================
+// 11. DOCUMENT AI — INGESTÃO E EXTRAÇÃO ESTRUTURADA (PASSO 4)
+// =====================================================================================
+
+enum DocumentType {
+  INVOICE
+  PACKING_LIST
+  QUOTATION_EMAIL
+}
+
+enum DocumentStatus {
+  PENDING_REVIEW  // extraído pela IA, aguarda confirmação humana
+  CONFIRMED       // revisto e confirmado — pode gerar Shipment/AWB/Guia
+  REJECTED        // descartado (falso positivo, documento ilegível, etc.)
+  BOOKED          // já deu origem a um Shipment (ver linkedShipmentId)
+}
+
+/// Regista cada documento submetido ao módulo de Document AI (Passo 4) — o
+/// ficheiro de origem, o payload estruturado devolvido pelo modelo, uma
+/// pontuação de confiança e o estado do fluxo de revisão humana. Nunca é
+/// usado para criar reservas automaticamente sem confirmação (ver
+/// modules/ai/bookingAutomation.ts) — a IA propõe, uma pessoa confirma.
+model IngestedDocument {
+  id                String         @id @default(cuid())
+  tenantId          String
+  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  type              DocumentType
+  status            DocumentStatus @default(PENDING_REVIEW)
+  sourceFileName    String?
+  sourceMimeType    String?
+  rawTextExcerpt    String?        // primeiros ~2000 caracteres do texto/email de origem, para auditoria
+  extractedPayload  Json           // resultado validado (ver modules/ai/schemas.ts para o formato por tipo)
+  confidenceScore   Decimal?       @db.Decimal(4, 3) // 0.000–1.000, reportado pelo próprio modelo
+  modelUsed         String?        // ex.: "claude-sonnet-4-5"
+  reviewNotes       String?
+  reviewedByUserId  String?
+  linkedShipmentId  String?
+  linkedShipment    Shipment?      @relation(fields: [linkedShipmentId], references: [id])
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, type])
+  @@map("ingested_documents")
+}
+
+// =====================================================================================
+// 12. LEVANTAMENTO DE CARGA IMPORTADA — ULD, CONFERÊNCIA, PAGAMENTO & VIP (PASSO 6)
+// -------------------------------------------------------------------------------------
+// Cobre o fluxo do lado da CHEGADA (oposto ao Passo 2, que cobre a emissão do
+// lado do envio): a carga aérea chega num ULD, a equipa de conferência
+// confere e arruma no WMS, o AWB fica "pronto para pagamento" das taxas de
+// importação, o destinatário paga (EMIS/MCX Express), recebe notificação por
+// email, e a equipa entrega o AWB original (carimbado/assinado, guardado em
+// cofre) — presencialmente ou por um serviço de entrega pago à parte.
+// Destinatários com volume de movimentos elevado (ver `Party.vipStatus`,
+// recalculado por `recalculateVipStatus()`) seguem um circuito prioritário.
+// =====================================================================================
+
+enum UldType {
+  CONTAINER // ex.: AKE, AKH
+  PALLET // ex.: PMC, PAG
+}
+
+/// Unit Load Device — contentor ou palete que agrega fisicamente uma ou mais
+/// AWBs num único voo. Distinto do AWB: o número do ULD é atribuído pela
+/// transportadora aérea, não pelo expedidor/agente de carga.
+model Uld {
+  id           String    @id @default(cuid())
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uldNumber    String // ex.: "AKE12345LA" (código tipo+serial+companhia aérea IATA)
+  type         UldType   @default(CONTAINER)
+  flightId     String?
+  flight       Flight?   @relation(fields: [flightId], references: [id])
+  warehouseId  String? // armazém/terminal de carga onde deu entrada
+  warehouse    Warehouse? @relation(fields: [warehouseId], references: [id])
+  arrivedAt    DateTime?
+  brokenDownAt DateTime? // momento em que a conferência terminou de descarregar o ULD
+  createdAt    DateTime  @default(now())
+
+  airWaybills   AirWaybill[]
+  cargoReleases CargoRelease[]
+
+  @@unique([tenantId, uldNumber])
+  @@index([tenantId])
+  @@map("ulds")
+}
+
+enum CargoReleaseStatus {
+  ARRIVED_AT_BREAKDOWN // ULD chegou, aguarda conferência/descarga
+  STORED // arrumado numa posição do armazém (WMS) pela conferência
+  READY_FOR_PAYMENT // AWB pronto para pagamento das taxas de importação
+  PAYMENT_CONFIRMED // pagamento confirmado — aguarda carimbo/assinatura do original
+  READY_FOR_PICKUP // AWB original carimbado/assinado, guardado no cofre
+  OUT_FOR_DELIVERY // a caminho do destinatário via serviço de entrega pago
+  COLLECTED // levantado pelo destinatário (ou entregue, no caso de delivery)
+}
+
+/// Processo de levantamento de UMA AWB de importação — da chegada física ao
+/// levantamento/entrega. Um registo por AWB (relação 1:1); o histórico de
+/// transição de estados fica na auditoria da aplicação, não neste modelo.
+model CargoRelease {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  airWaybillId String     @unique
+  airWaybill   AirWaybill @relation(fields: [airWaybillId], references: [id], onDelete: Cascade)
+  uldId        String?
+  uld          Uld?       @relation(fields: [uldId], references: [id])
+
+  status CargoReleaseStatus @default(ARRIVED_AT_BREAKDOWN)
+
+  breakdownByUserId String?
+  breakdownByUser   User?            @relation("CargoReleaseBreakdown", fields: [breakdownByUserId], references: [id])
+  storedLocationId  String? // posição do WMS onde a conferência arrumou a carga
+  storedLocation    StorageLocation? @relation(fields: [storedLocationId], references: [id])
+
+  // Copiado do Party.vipStatus no momento da conferência, para que o
+  // histórico não mude se o estatuto VIP do destinatário mudar depois.
+  isVip Boolean @default(false)
+
+  feesTransactionId    String?      @unique // Transaction (EMIS_REFERENCE/MCX_EXPRESS) das taxas de importação
+  feesTransaction      Transaction? @relation(fields: [feesTransactionId], references: [id])
+  documentCustodyNotes String? // ex.: "carimbado e assinado às 14h32, guardado no cofre A"
+
+  deliveryRequested Boolean   @default(false) // destinatário pediu entrega ao domicílio em vez de levantamento presencial
+  deliveryFee       Decimal?  @db.Decimal(18, 4)
+  deliveryAddress   String?
+  deliveredAt       DateTime?
+
+  notifiedReadyForPaymentAt DateTime? // email "pronto para pagamento" enviado
+  notifiedReadyForPickupAt  DateTime? // email/SMS "pronto para levantamento" enviado
+  readyForPaymentAt         DateTime?
+  paidAt                    DateTime?
+  readyForPickupAt          DateTime?
+  collectedAt               DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, status])
+  @@index([tenantId, isVip])
+  @@map("cargo_releases")
+}

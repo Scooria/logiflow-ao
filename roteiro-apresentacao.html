@@ -1,0 +1,354 @@
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<title>Roteiro LogiFlow AO</title>
+<style>
+  :root {
+    --bg: #F1F4F2;
+    --surface: #FFFFFF;
+    --surface-2: #E7ECE9;
+    --ink: #16211E;
+    --ink-muted: #55655F;
+    --ink-faint: #869089;
+    --border: #D7DEDA;
+    --accent: #D9622B;
+    --accent-ink: #FFFFFF;
+    --accent-soft: #FBE6D9;
+    --teal: #1B6E77;
+    --teal-soft: #DCEEEF;
+    --good: #2F7A4F;
+    --good-soft: #E1F1E5;
+    --warn: #A9700D;
+    --warn-soft: #FBEED9;
+    --critical: #B23A2E;
+    --critical-soft: #FBE3E0;
+    --shadow: 0 1px 2px rgba(22,33,30,0.06), 0 8px 24px rgba(22,33,30,0.06);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101715;
+      --surface: #16201D;
+      --surface-2: #1C2825;
+      --ink: #ECEFEC;
+      --ink-muted: #9FADA6;
+      --ink-faint: #6D7B75;
+      --border: #2A3833;
+      --accent: #E9884F;
+      --accent-ink: #16130E;
+      --accent-soft: #3A2A1D;
+      --teal: #5CBAC0;
+      --teal-soft: #1A3335;
+      --good: #57B87B;
+      --good-soft: #1B2E22;
+      --warn: #E0AA47;
+      --warn-soft: #332A16;
+      --critical: #E37A6C;
+      --critical-soft: #35201D;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #101715;
+    --surface: #16201D;
+    --surface-2: #1C2825;
+    --ink: #ECEFEC;
+    --ink-muted: #9FADA6;
+    --ink-faint: #6D7B75;
+    --border: #2A3833;
+    --accent: #E9884F;
+    --accent-ink: #16130E;
+    --accent-soft: #3A2A1D;
+    --teal: #5CBAC0;
+    --teal-soft: #1A3335;
+    --good: #57B87B;
+    --good-soft: #1B2E22;
+    --warn: #E0AA47;
+    --warn-soft: #332A16;
+    --critical: #E37A6C;
+    --critical-soft: #35201D;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 860px; margin: 0 auto; padding: 40px 24px 96px; }
+
+  header.top { margin-bottom: 32px; }
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 5px 10px; border-radius: 999px; margin-bottom: 16px;
+  }
+  .eyebrow .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+  h1 {
+    font-family: "Archivo", ui-sans-serif, sans-serif;
+    font-weight: 800; font-size: clamp(28px, 4.5vw, 40px);
+    line-height: 1.08; letter-spacing: -0.01em; margin: 0 0 10px;
+    text-wrap: balance;
+  }
+  .sub { color: var(--ink-muted); font-size: 16px; line-height: 1.55; max-width: 62ch; margin: 0; }
+
+  .meta-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+  .meta-chip {
+    font-family: "IBM Plex Mono", monospace; font-size: 12.5px; font-weight: 500;
+    color: var(--ink-muted); background: var(--surface); border: 1px solid var(--border);
+    padding: 6px 11px; border-radius: 8px;
+  }
+  .meta-chip b { color: var(--ink); font-weight: 600; }
+
+  section { margin-top: 40px; }
+  h2 {
+    font-family: "Archivo", sans-serif; font-weight: 700; font-size: 13px;
+    letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-faint);
+    margin: 0 0 16px;
+  }
+
+  /* Scenario cards */
+  .scenarios { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .scenario {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; box-shadow: var(--shadow);
+  }
+  .scenario .icon { font-size: 20px; }
+  .scenario h3 { font-size: 14.5px; font-weight: 600; margin: 10px 0 6px; }
+  .scenario p { font-size: 13px; color: var(--ink-muted); line-height: 1.5; margin: 0; }
+  .scenario code {
+    font-family: "IBM Plex Mono", monospace; font-size: 12px; background: var(--surface-2);
+    padding: 1px 5px; border-radius: 4px; color: var(--ink);
+  }
+
+  /* Access links */
+  .access { display: grid; gap: 10px; }
+  .access-item {
+    display: flex; align-items: center; gap: 14px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .access-item .tag {
+    font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 600;
+    letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 4px 8px; border-radius: 6px; white-space: nowrap;
+  }
+  .tag.live { background: var(--good-soft); color: var(--good); }
+  .tag.offline { background: var(--warn-soft); color: var(--warn); }
+  .tag.video { background: var(--teal-soft); color: var(--teal); }
+  .access-item .label { font-size: 14.5px; font-weight: 500; flex: 1; min-width: 0; }
+  .access-item .path {
+    font-family: "IBM Plex Mono", monospace; font-size: 12.5px; color: var(--ink-muted);
+    word-break: break-all;
+  }
+  .access-item a { color: var(--teal); text-decoration: none; border-bottom: 1px solid transparent; }
+  .access-item a:hover { border-bottom-color: var(--teal); }
+
+  /* Timeline */
+  .timeline { display: flex; flex-direction: column; }
+  .step {
+    display: grid; grid-template-columns: 64px 1fr; gap: 16px;
+    padding: 16px 0; border-top: 1px solid var(--border);
+  }
+  .step:first-child { border-top: none; }
+  .step .time {
+    font-family: "IBM Plex Mono", monospace; font-size: 12.5px; font-weight: 600;
+    color: var(--accent); padding-top: 2px;
+  }
+  .step h3 { font-size: 15.5px; font-weight: 600; margin: 0 0 6px; }
+  .step .do { font-size: 13.5px; color: var(--ink); line-height: 1.55; margin: 0 0 6px; }
+  .step .do b { font-weight: 600; }
+  .step .say {
+    font-size: 13.5px; color: var(--ink-muted); line-height: 1.55; margin: 0;
+    padding-left: 12px; border-left: 2px solid var(--border); font-style: italic;
+  }
+  .step .stat {
+    display: inline-block; margin-top: 8px; font-family: "IBM Plex Mono", monospace;
+    font-size: 12px; font-weight: 600; color: var(--teal); background: var(--teal-soft);
+    padding: 3px 8px; border-radius: 6px;
+  }
+
+  /* FAQ */
+  .faq { display: grid; gap: 10px; }
+  .faq-item {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .faq-item .q { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
+  .faq-item .a { font-size: 13.5px; color: var(--ink-muted); line-height: 1.55; margin: 0; }
+
+  .callout {
+    background: var(--critical-soft); border: 1px solid color-mix(in oklab, var(--critical) 35%, var(--border));
+    border-radius: 12px; padding: 14px 16px; font-size: 13.5px; color: var(--ink);
+    line-height: 1.55;
+  }
+  .callout b { color: var(--critical); }
+
+  footer {
+    margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border);
+    font-size: 12.5px; color: var(--ink-faint); text-align: center;
+  }
+
+  @media (max-width: 640px) {
+    .scenarios { grid-template-columns: 1fr; }
+    .step { grid-template-columns: 1fr; gap: 4px; }
+    .step .time { padding-top: 0; }
+  }
+
+  @media print {
+    body { background: #fff; }
+    .wrap { max-width: 100%; padding: 0 8mm; }
+    .scenario, .access-item, .faq-item { box-shadow: none; }
+    section { margin-top: 26px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="top">
+    <div class="eyebrow"><span class="dot"></span>Guião de demonstração</div>
+    <h1>LogiFlow AO — roteiro de 5 minutos</h1>
+    <p class="sub">Apresentação de quinta-feira. Segue esta ordem, diz as frases-guia com as tuas palavras, e usa os números reais destacados a laranja como gancho — não são ilustrativos.</p>
+    <div class="meta-row">
+      <span class="meta-chip">📅 <b>Quinta-feira, 27 de agosto de 2026</b></span>
+      <span class="meta-chip">⏱ <b>~5 min</b> de demo + perguntas</span>
+      <span class="meta-chip">🖥 <b>3 cenários</b> preparados</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>Antes de entrares na sala</h2>
+    <div class="scenarios">
+      <div class="scenario">
+        <div class="icon">🌐</div>
+        <h3>Internet ao vivo</h3>
+        <p>Abre o <b>link publicado</b> (ver acessos abaixo) num separador já aberto antes de começar. É a versão preferida — mais rápida, sem ficheiros locais.</p>
+      </div>
+      <div class="scenario">
+        <div class="icon">📴</div>
+        <h3>Sem internet garantida</h3>
+        <p>Abre <code>LogiFlow-AO-offline.html</code> diretamente no browser (duplo clique). Funciona 100% local, testado sem rede — mesmo aspeto, mesmos dados de demo.</p>
+      </div>
+      <div class="scenario">
+        <div class="icon">📽️</div>
+        <h3>Projetor / ecrã partilhado</h3>
+        <p>Testado em 1366×768, 1920×1080 e 2560×1440 — layout mantém-se limpo em todos. Usa <b>F11</b> para ecrã inteiro e esconde a barra de marcadores antes de partilhar.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Acessos rápidos</h2>
+    <div class="access">
+      <div class="access-item">
+        <span class="tag live">Ao vivo</span>
+        <span class="label">LogiFlow AO — Artifact publicado</span>
+        <a href="https://claude.ai/code/artifact/8cea5295-9eb8-4b5d-a51e-3b1af8ff59a4" target="_blank" rel="noopener">claude.ai/code/artifact/8cea5295…</a>
+      </div>
+      <div class="access-item">
+        <span class="tag offline">Reserva local</span>
+        <span class="label">Cópia offline (sem rede)</span>
+        <span class="path">LogiFlow-AO-offline.html</span>
+      </div>
+      <div class="access-item">
+        <span class="tag video">Última rede</span>
+        <span class="label">Vídeo de segurança gravado (43s)</span>
+        <span class="path">LogiFlow-AO-demo-seguranca.mp4</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>O guião, minuto a minuto</h2>
+    <div class="timeline">
+
+      <div class="step">
+        <div class="time">0:00</div>
+        <div>
+          <h3>Abertura — Dashboard Multimodal</h3>
+          <p class="do">Entra já no <b>Dashboard</b>. Mostra os KPIs no topo (Total de Envios, Em Trânsito, Faturação AOA/USD).</p>
+          <p class="say">"Isto é um painel único que junta carga aérea e terrestre em Angola — hoje isso vive em folhas de Excel separadas por província."</p>
+          <span class="stat">Corredor do Lobito: financiamento de US$753M fechado em julho de 2026</span>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="time">0:45</div>
+        <div>
+          <h3>Nova Expedição — cria uma guia ao vivo</h3>
+          <p class="do">Clica <b>Nova Expedição</b> → escolhe <b>Terrestre</b> → seleciona origem/destino (ex.: Benguela → Huambo) → preenche expedidor/consignatário e um volume → <b>Emitir Expedição</b>.</p>
+          <p class="say">"O peso taxável calcula-se sozinho pela convenção IATA, e a guia sai com numeração sequencial válida — pronta para imprimir."</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="time">2:00</div>
+        <div>
+          <h3>Painel WMS — armazém com código de barras</h3>
+          <p class="do">Clica <b>Painel WMS</b> → clica numa posição ocupada da prateleira.</p>
+          <p class="say">"Cada posição tem um endereço único com código de barras e QR gerados na hora — dá para imprimir a etiqueta e colar na prateleira hoje."</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="time">2:45</div>
+        <div>
+          <h3>Pagamentos — Multicaixa, RUPE, Stripe</h3>
+          <p class="do">Clica <b>Pagamentos</b> → gera uma <b>Referência Multicaixa</b> → muda para <b>Stripe Internacional</b> e gera um checkout de teste.</p>
+          <p class="say">"A integração EMIS/Multicaixa já fala com a API real do banco — só falta a entidade comercial. O Stripe está pronto para clientes internacionais desde já."</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="time">3:45</div>
+        <div>
+          <h3>Document AI — lê uma fatura sozinho</h3>
+          <p class="do">Clica <b>Document AI</b> → escolhe a fatura de exemplo → mostra os campos extraídos automaticamente.</p>
+          <p class="say">"Isto poupa horas de introdução manual de dados — a IA lê a fatura, propõe os campos, e um humano confirma antes de qualquer reserva."</p>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="time">4:20</div>
+        <div>
+          <h3>Copilot + fecho</h3>
+          <p class="do">Clica <b>Copilot</b> → faz uma pergunta pronta (ex.: rota Luanda–Huambo) → volta ao <b>Dashboard</b> para fechar.</p>
+          <p class="say">"O mercado angolano de logística está a receber mais de US$250 milhões em investimento público em 6 províncias este ano — o LogiFlow AO é o software que falta para essa infraestrutura nova."</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Perguntas prováveis</h2>
+    <div class="faq">
+      <div class="faq-item">
+        <p class="q">"Isto já está ligado a um banco ou à AGT de verdade?"</p>
+        <p class="a">A integração EMIS/Multicaixa é código real, pronto para produção — falta apenas o contrato comercial com um banco (BFA/BAI/BIC) para obter a Entidade e as chaves de API. O RUPE (AGT) ainda não tem integração — está documentado como o próximo passo, porque exige credenciação junto da AGT.</p>
+      </div>
+      <div class="faq-item">
+        <p class="q">"É só um mockup ou já funciona a sério?"</p>
+        <p class="a">A app está a correr em modo demonstração com dados de exemplo, mas todo o backend (API, base de dados, autenticação) já está escrito e pronto — basta apontar a variável de ligação à API para sair do modo demo. Isso está documentado passo a passo no guia de deployment.</p>
+      </div>
+      <div class="faq-item">
+        <p class="q">"Quanto tempo até ter isto em produção real?"</p>
+        <p class="a">A infraestrutura (Docker, base de dados, hosting) está configurada e pronta a publicar num serviço como o Render em poucas horas. O que determina o calendário real é obter as credenciais institucionais (banco para o Multicaixa, AGT para o RUPE), não o desenvolvimento do software.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="callout">
+      <b>Nota:</b> se o Scanner mostrar um aviso de "câmara não encontrada", é normal no portátil de apresentação — usa o campo de introdução manual logo abaixo do vídeo da câmara, funciona da mesma forma.
+    </div>
+  </section>
+
+  <footer>LogiFlow AO — preparado para a apresentação de 27 de agosto de 2026</footer>
+
+</div>

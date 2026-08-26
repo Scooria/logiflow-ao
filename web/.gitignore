@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-artifact/
+.env
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

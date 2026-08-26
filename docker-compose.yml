@@ -1,0 +1,57 @@
+# Stack completa local — Postgres + API (Passo 2) + Frontend (Passo 3/5).
+#
+#   docker compose up --build
+#   docker compose exec api npx prisma migrate deploy
+#   docker compose exec api npx prisma db seed
+#
+# Depois: frontend em http://localhost:8080, API em http://localhost:3000.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: logiflow
+      POSTGRES_PASSWORD: logiflow_dev
+      POSTGRES_DB: logiflow_ao
+    ports:
+      - "5432:5432"
+    volumes:
+      - logiflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logiflow -d logiflow_ao"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: "postgresql://logiflow:logiflow_dev@db:5432/logiflow_ao?schema=public"
+      ALLOW_SEED_ROUTE_FALLBACK: "true"
+      # ANTHROPIC_API_KEY: "" # necessária para Document AI/Copilot (Passo 4) — ver .env.example
+    ports:
+      - "3000:3000"
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: "http://localhost:3000"
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  logiflow_db_data:

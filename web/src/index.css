@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+/*
+ * Paleta de dados (LogiFlow AO) — segue a skill dataviz: categórica em ordem
+ * fixa, sequencial azul para magnitude, estado reservado a good/warning/
+ * serious/critical. Ver README-DESIGN.md para a justificação de cada token.
+ */
+@theme {
+  --color-surface-1: #fcfcfb;
+  --color-page: #f9f9f7;
+  --color-text-primary: #0b0b0b;
+  --color-text-secondary: #52514e;
+  --color-text-muted: #898781;
+  --color-grid: #e1e0d9;
+  --color-baseline: #c3c2b7;
+  --color-success-text: #006300;
+
+  --color-series-1: #2a78d6; /* azul — Aéreo / identidade primária */
+  --color-series-2: #eb6834; /* laranja — Terrestre */
+  --color-series-3: #1baf7a; /* aqua */
+  --color-series-4: #eda100; /* amarelo */
+  --color-series-5: #e87ba4; /* magenta */
+  --color-series-6: #008300; /* verde */
+  --color-series-7: #4a3aa7; /* violeta */
+  --color-series-8: #e34948; /* vermelho */
+
+  --color-status-good: #0ca30c;
+  --color-status-warning: #fab219;
+  --color-status-serious: #ec835a;
+  --color-status-critical: #d03b3b;
+
+  --color-seq-100: #cde2fb;
+  --color-seq-200: #9ec5f4;
+  --color-seq-300: #6da7ec;
+  --color-seq-400: #3987e5;
+  --color-seq-500: #256abf;
+  --color-seq-600: #184f95;
+  --color-seq-700: #0d366b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-surface-1: #1a1a19;
+    --color-page: #0d0d0d;
+    --color-text-primary: #ffffff;
+    --color-text-secondary: #c3c2b7;
+    --color-text-muted: #898781;
+    --color-grid: #2c2c2a;
+    --color-baseline: #383835;
+    --color-success-text: #0ca30c;
+
+    --color-series-1: #3987e5;
+    --color-series-2: #d95926;
+    --color-series-3: #199e70;
+    --color-series-4: #c98500;
+    --color-series-5: #d55181;
+    --color-series-6: #008300;
+    --color-series-7: #9085e9;
+    --color-series-8: #e66767;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-surface-1: #1a1a19;
+  --color-page: #0d0d0d;
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #c3c2b7;
+  --color-text-muted: #898781;
+  --color-grid: #2c2c2a;
+  --color-baseline: #383835;
+  --color-success-text: #0ca30c;
+
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+  --color-series-5: #d55181;
+  --color-series-6: #008300;
+  --color-series-7: #9085e9;
+  --color-series-8: #e66767;
+}
+
+body {
+  background-color: var(--color-page);
+  color: var(--color-text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Movimento — pequenos sinais de vida que tornam a interface "respondida"
+ * em vez de estática: entrada suave de conteúdo novo, feedback táctil em
+ * botões, e um indicador "ao vivo" para os dados que fazem polling. Tudo
+ * desligado sob prefers-reduced-motion.
+ */
+@keyframes lf-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes lf-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-up {
+  animation: lf-fade-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-fade-in {
+  animation: lf-fade-in 0.3s ease both;
+}
+
+/* Feedback táctil global — qualquer botão "responde" ao clique, sem ter de
+   anotar cada componente individualmente. */
+button:not(:disabled) {
+  transition: transform 150ms ease, opacity 150ms ease, background-color 150ms ease, color 150ms ease,
+    border-color 150ms ease, box-shadow 150ms ease;
+}
+button:not(:disabled):active {
+  transform: scale(0.96);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .animate-fade-in {
+    animation: none !important;
+  }
+  button:not(:disabled):active {
+    transform: none;
+  }
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

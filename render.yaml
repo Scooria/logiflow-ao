@@ -1,0 +1,47 @@
+# Blueprint de deployment para o Render (https://render.com) — cria a base
+# de dados, a API e o frontend com "New +" -> "Blueprint" apontado a este
+# repositório. Ver DEPLOY.md para o passo-a-passo completo e alternativas
+# (Railway, Fly.io).
+databases:
+  - name: logiflow-ao-db
+    databaseName: logiflow_ao
+    plan: free
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: logiflow-ao-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: logiflow-ao-db
+          property: connectionString
+      - key: ALLOW_SEED_ROUTE_FALLBACK
+        value: "true"
+      - key: ANTHROPIC_API_KEY
+        sync: false # define manualmente no painel do Render — necessária para Document AI/Copilot (Passo 4)
+      - key: EMIS_API_BASE_URL
+        sync: false
+      - key: EMIS_ENTITY_ID
+        sync: false
+      - key: EMIS_API_KEY
+        sync: false
+      - key: EMIS_WEBHOOK_SECRET
+        sync: false
+
+  - type: web
+    name: logiflow-ao-web
+    runtime: docker
+    dockerfilePath: ./web/Dockerfile
+    dockerContext: ./web
+    dockerBuildArgs:
+      VITE_API_BASE_URL: https://logiflow-ao-api.onrender.com
+    plan: free
