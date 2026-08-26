@@ -16,7 +16,7 @@
 FROM node:22-slim AS build
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json prisma.config.ts ./
 COPY prisma ./prisma
 RUN npm ci
 
@@ -29,12 +29,19 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json prisma.config.ts tsconfig.json ./
 COPY prisma ./prisma
-RUN npm ci --omit=dev
+# NOTA TEMPORÁRIA (arranque único): `npm ci` completo (não `--omit=dev`)
+# para ter `ts-node`/`typescript` disponíveis e correr `prisma db push` +
+# `prisma db seed` no arranque, contra uma base de dados Postgres vazia.
+# Depois de confirmado que a base de dados já tem as tabelas e os dados de
+# demonstração, isto deve reverter para `npm ci --omit=dev` + `CMD ["node",
+# "dist/server.js"]` (ver histórico do git) para manter a imagem de produção
+# leve e não voltar a semear a cada arranque.
+RUN npm ci
 RUN npx prisma generate
 
 COPY --from=build /app/dist ./dist
 
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+CMD ["sh", "-c", "npx prisma db push --accept-data-loss --skip-generate && (npx prisma db seed || true); node dist/server.js"]
